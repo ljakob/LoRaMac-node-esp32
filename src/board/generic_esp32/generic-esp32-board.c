@@ -7,7 +7,12 @@
 
 #include "freertos/task.h"
 
+// from LoRaMac
 #include "board.h"
+
+// ANSI
+#include <string.h>
+
 
 static const char *TAG = "ESP32Board";
 
@@ -44,6 +49,7 @@ void DelayMs( uint32_t ms )
 }
 
 #include "esp_efuse.h"
+#include "esp_efuse_table.h"
 
 uint32_t BoardGetRandomSeed( void )
 {
@@ -138,7 +144,8 @@ LmnStatus_t EepromMcuReadBuffer( uint16_t addr, uint8_t *buffer, uint16_t size )
 LmnStatus_t EepromMcuWriteBuffer( uint16_t addr, uint8_t *buffer, uint16_t size )
 {
     nvs_handle_t handle;
-    int res = nvs_open(namespace, NVS_READONLY, &handle);
+    nvs_open(namespace, NVS_READONLY, &handle);
+    return 42;
 }
 
 // RTC

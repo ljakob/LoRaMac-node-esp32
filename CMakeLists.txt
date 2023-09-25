@@ -1,5 +1,6 @@
 set(COMPONENT_REQUIRES
     nvs_flash
+    efuse
 )
 
 
