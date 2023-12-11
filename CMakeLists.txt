@@ -54,7 +54,10 @@ set(COMPONENT_ADD_INCLUDEDIRS
     "src/LoRaMac-node/src/peripherals/soft-se"
 )
 
-register_component()
+idf_component_register(SRCS ${COMPONENT_SRCS}
+                       INCLUDE_DIRS ${COMPONENT_ADD_INCLUDEDIRS}
+                       REQUIRES ${COMPONENT_REQUIRES}
+)
 
 add_definitions(-DREGION_EU868=1)
 add_definitions(-DSOFT_SE)
