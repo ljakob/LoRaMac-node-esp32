@@ -1,0 +1,47 @@
+menu "LoRaWAN Configuration"
+
+    config LORAWAN_SPI_MISO_GPIO
+        int "SPI MISO GPIO"
+        help
+            Set the GPIO number used for SPI MISO.
+
+    config LORAWAN_SPI_MOSI_GPIO
+        int "SPI MOSI GPIO"
+        help
+            Set the GPIO number used for SPI MOSI.
+
+    config LORAWAN_SPI_SCLK_GPIO
+        int "SPI SCLK GPIO"
+        help
+            Set the GPIO number used for SPI SCLK.
+
+    config LORAWAN_SPI_CS_GPIO
+        int "SPI CS GPIO"
+        help
+            Set the GPIO number used for SPI CS.
+
+    config LORAWAN_RESET_GPIO
+        int "SX1262 RESET GPIO"
+        help
+            Set the GPIO number used for RESET.
+
+    config LORAWAN_IRQ_DIO1_GPIO
+        int "SX1262 IRQ (DIO1) GPIO"
+        help
+            Set the GPIO number used for IRQ (DIO1).
+
+    config LORAWAN_BUSY_GPIO
+        int "SX1262 BUSY GPIO"
+        help
+            Set the GPIO number used for BUSY.
+
+    config LORAWAN_SPI_HOST
+        int "SX1262 SPI HOST"
+        default 1
+        help
+            The SPI peripheral used to communicate with the SX1262.
+            0 = SPI1_HOST
+            1 = SPI2_HOST
+            2 = SPI3_HOST
+
+endmenu
