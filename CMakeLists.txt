@@ -59,5 +59,10 @@ idf_component_register(SRCS ${COMPONENT_SRCS}
                        REQUIRES ${COMPONENT_REQUIRES}
 )
 
+include_directories(
+    $ENV{IDF_PATH}/components/driver/gpio/include
+    $ENV{IDF_PATH}/components/driver/spi/include
+)
+
 add_definitions(-DREGION_EU868=1)
 add_definitions(-DSOFT_SE)
