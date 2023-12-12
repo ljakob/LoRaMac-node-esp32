@@ -17,6 +17,8 @@
 // ANSI
 #include <string.h>
 
+#define ESP_INTR_FLAG_DEFAULT   0
+
 #define HZ_PER_KHZ  1000
 #define KHZ_PER_MHZ 1000
 #define HZ_PER_MHZ  (HZ_PER_KHZ * KHZ_PER_MHZ)
@@ -347,12 +349,48 @@ void RtcStopAlarm( void )
 
 static RadioOperatingModes_t OperatingMode;
 
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+void SX126xWaitOnBusy( void )
+{
+    while(gpio_get_level(lora_spi.busy) == 1);
+}
+#endif
+
 /*!
  * \brief HW Reset of the radio
  */
 void SX126xReset( void )
 {
+    gpio_config_t cfg_reset_output = {
+        (1ULL<<lora_spi.reset),
+        GPIO_MODE_OUTPUT,
+        GPIO_PULLUP_ENABLE,
+        GPIO_PULLDOWN_DISABLE,
+        GPIO_INTR_DISABLE
+    };
+    ESP_ERROR_CHECK(gpio_config(&cfg_reset_output));
 
+    ESP_ERROR_CHECK(gpio_set_level(lora_spi.reset, 1));
+
+    // Hold low for at least 100us.
+    // SX1261/2 Datasheet, Rev 1.1 Section 8.1 Reset
+    DelayMs(1);
+
+    gpio_config_t cfg_reset_input = {
+        (1ULL<<lora_spi.reset),
+        GPIO_MODE_DISABLE,
+        GPIO_PULLUP_ENABLE,
+        GPIO_PULLDOWN_DISABLE,
+        GPIO_INTR_DISABLE
+    };
+    ESP_ERROR_CHECK(gpio_config(&cfg_reset_input));
+
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    // Wait for chip to be ready.
+    SX126xWaitOnBusy();
+#endif
+
+    SX126xSetOperatingMode(MODE_STDBY_RC);
 }
 
 /*!
@@ -360,9 +398,29 @@ void SX126xReset( void )
  */
 void SX126xWakeup( void )
 {
+    CRITICAL_SECTION_BEGIN( );
 
+    ESP_ERROR_CHECK(gpio_set_level(lora_spi.cs, 0));
+    ESP_ERROR_CHECK(gpio_set_level(lora_spi.cs, 1));
+
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    // Wait for chip to be ready.
+    SX126xWaitOnBusy();
+#endif
+
+    // Update operating mode context variable
+    SX126xSetOperatingMode(MODE_STDBY_RC);
+
+    CRITICAL_SECTION_END( );
 }
 
+/*!
+ * \brief Initializes the RF Switch I/Os pins interface
+ */
+void SX126xAntSwOn( void )
+{
+    // No antenna switch available on this board design.
+}
 
 /*!
  * \brief De-initializes the RF Switch I/Os pins interface
@@ -371,7 +429,7 @@ void SX126xWakeup( void )
  */
 void SX126xAntSwOff( void )
 {
-
+    // No antenna switch available on this board design.
 }
 
 /*!
@@ -424,8 +482,17 @@ void SX126xSetOperatingMode( RadioOperatingModes_t mode )
  */
 void SX126xIoIrqInit( DioIrqHandler dioIrq )
 {
-    //GpioSetInterrupt( &SX126x.DIO1, IRQ_RISING_EDGE, IRQ_HIGH_PRIORITY, dioIrq );
-
+    gpio_config_t io_conf = {
+        (1ULL<<lora_spi.irq_dio1),
+        GPIO_MODE_INPUT,
+        GPIO_PULLUP_DISABLE,
+        GPIO_PULLDOWN_DISABLE,
+        GPIO_INTR_POSEDGE
+    };
+    ESP_ERROR_CHECK(gpio_config(&io_conf));
+    ESP_ERROR_CHECK(gpio_set_intr_type(lora_spi.irq_dio1, GPIO_INTR_POSEDGE));
+    ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_DEFAULT));
+    ESP_ERROR_CHECK(gpio_isr_handler_add(lora_spi.irq_dio1, dioIrq, (void*) lora_spi.irq_dio1));
 }
 
 /*!
@@ -435,7 +502,7 @@ void SX126xIoIrqInit( DioIrqHandler dioIrq )
  */
 uint32_t SX126xGetDio1PinState( void )
 {
-    return 0;
+    return gpio_get_level(lora_spi.irq_dio1);
 }
 
 /*!
@@ -443,7 +510,7 @@ uint32_t SX126xGetDio1PinState( void )
  */
 void SX126xIoRfSwitchInit( void )
 {
-
+    SX126xSetDio2AsRfSwitchCtrl(true);
 }
 
 /*!
@@ -451,7 +518,7 @@ void SX126xIoRfSwitchInit( void )
  */
 void SX126xIoTcxoInit( void )
 {
-
+    // No TCXO component available on this board design.
 }
 
 /*!
@@ -461,7 +528,7 @@ void SX126xIoTcxoInit( void )
  */
 void SX126xSetRfTxPower( int8_t power )
 {
-
+    SX126xSetTxParams( power, RADIO_RAMP_40_US );
 }
 
 // SPI stuff
@@ -474,7 +541,7 @@ void SX126xSetRfTxPower( int8_t power )
  */
 void SX126xWriteRegister( uint16_t address, uint8_t value )
 {
-
+    SX126xWriteRegisters(address, &value, 1);
 }
 
 /*!
@@ -486,15 +553,47 @@ void SX126xWriteRegister( uint16_t address, uint8_t value )
  */
 uint8_t SX126xReadRegister( uint16_t address )
 {
-    return 0;    
+    uint8_t data;
+    SX126xReadRegisters(address, &data, 1);
+    return data;
 }
 
 void SX126xReadRegisters( uint16_t address, uint8_t *buffer, uint16_t size )
 {
-    
+    spi_transaction_t trans = {};
+    trans.cmd = RADIO_READ_REGISTER;
+    trans.addr = address;
+    trans.rx_buffer = buffer;
+    trans.length = size * 8;    // size is in bits, not bytes
+    // https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/peripherals/spi_master.html#_CPPv4N17spi_transaction_t6lengthE
+
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    SX126xCheckDeviceReady();
+#endif
+
+    ESP_ERROR_CHECK(spi_device_transmit(lora_spi.handle, &trans));
+
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    SX126xWaitOnBusy();
+#endif
 }
 void SX126xWriteRegisters( uint16_t address, uint8_t *buffer, uint16_t size )
 {
+    spi_transaction_t trans = {};
+    trans.cmd = RADIO_WRITE_REGISTER;
+    trans.addr = address;
+    trans.tx_buffer = buffer;
+    trans.length = size * 8;    // size is in bits, not bytes
+
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    SX126xCheckDeviceReady();
+#endif
+
+    ESP_ERROR_CHECK(spi_device_transmit(lora_spi.handle, &trans));
+
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    SX126xWaitOnBusy();
+#endif
 }
 
 /*!
@@ -506,7 +605,20 @@ void SX126xWriteRegisters( uint16_t address, uint8_t *buffer, uint16_t size )
  */
 void SX126xWriteCommand( RadioCommands_t opcode, uint8_t *buffer, uint16_t size )
 {
+    spi_transaction_t trans= {};
+    trans.cmd = opcode;
+    trans.tx_buffer = buffer;
+    trans.length = size * 8;    // size is in bits, not bytes
 
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    SX126xCheckDeviceReady();
+#endif
+
+    ESP_ERROR_CHECK(spi_device_transmit(lora_spi.handle, &trans));
+
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    SX126xWaitOnBusy();
+#endif
 }
 
 /*!
@@ -520,14 +632,59 @@ void SX126xWriteCommand( RadioCommands_t opcode, uint8_t *buffer, uint16_t size 
  */
 uint8_t SX126xReadCommand( RadioCommands_t opcode, uint8_t *buffer, uint16_t size )
 {
+    spi_transaction_t trans = {};
+    trans.cmd = opcode;
+    trans.rx_buffer = buffer;
+    trans.length = size * 8;    // size is in bits, not bytes
+
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    SX126xCheckDeviceReady();
+#endif
+
+    ESP_ERROR_CHECK(spi_device_transmit(lora_spi.handle, &trans));
+
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    SX126xWaitOnBusy();
+#endif
+
     return 0;
 }
 
 void SX126xReadBuffer( uint8_t offset, uint8_t *buffer, uint8_t size )
 {
+    spi_transaction_t trans = {};
+    trans.cmd = RADIO_READ_BUFFER;
+    trans.addr = offset;
+    trans.rx_buffer = buffer;
+    trans.length = size * 8;    // size is in bits, not bytes
+
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    SX126xCheckDeviceReady();
+#endif
+
+    ESP_ERROR_CHECK(spi_device_transmit(lora_spi.handle, &trans));
+
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    SX126xWaitOnBusy();
+#endif
 }
 
 void SX126xWriteBuffer( uint8_t offset, uint8_t *buffer, uint8_t size )
 {
+    spi_transaction_t trans = {};
+    trans.cmd = RADIO_WRITE_BUFFER;
+    trans.addr = offset;
+    trans.tx_buffer = buffer;
+    trans.length = size * 8;    // size is in bits, not bytes
+
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    SX126xCheckDeviceReady();
+#endif
+
+    ESP_ERROR_CHECK(spi_device_transmit(lora_spi.handle, &trans));
+
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    SX126xWaitOnBusy();
+#endif
 }
 
