@@ -5,6 +5,10 @@
 #include "esp_err.h"
 #include "esp_log.h"
 
+#include "driver/gpio.h"
+#include "driver/spi_common.h"
+#include "driver/spi_master.h"
+
 #include "freertos/task.h"
 
 // from LoRaMac
@@ -13,6 +17,26 @@
 // ANSI
 #include <string.h>
 
+#define HZ_PER_KHZ  1000
+#define KHZ_PER_MHZ 1000
+#define HZ_PER_MHZ  (HZ_PER_KHZ * KHZ_PER_MHZ)
+
+#define SX1262_MAX_SPI_CLOCK_SPEED_MHZ  16
+
+typedef struct spi_s {
+    spi_device_handle_t handle;
+    gpio_num_t miso;
+    gpio_num_t mosi;
+    gpio_num_t sclk;
+    gpio_num_t cs;
+    gpio_num_t reset;
+    gpio_num_t irq_dio1;
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    gpio_num_t busy;
+#endif
+} spi_c;
+
+static spi_c lora_spi;
 
 static const char *TAG = "ESP32Board";
 
@@ -24,7 +48,52 @@ void BoardInitMcu( void )
 
 void BoardInitPeriph(void)
 {
+    esp_err_t ret;
 
+    lora_spi.miso = CONFIG_LORAWAN_SPI_MISO_GPIO;
+    lora_spi.mosi = CONFIG_LORAWAN_SPI_MOSI_GPIO;
+    lora_spi.sclk = CONFIG_LORAWAN_SPI_SCLK_GPIO;
+    lora_spi.cs = CONFIG_LORAWAN_SPI_CS_GPIO;
+    lora_spi.reset = CONFIG_LORAWAN_RESET_GPIO;
+    lora_spi.irq_dio1 = CONFIG_LORAWAN_IRQ_DIO1_GPIO;
+#if defined(SX1261MBXBAS) || defined(SX1262MBXCAS) || defined(SX1262MBXDAS)
+    lora_spi.busy = CONFIG_LORAWAN_BUSY_GPIO;
+
+    gpio_config_t busy_conf = {
+        (1ULL<<lora_spi.busy),
+        GPIO_MODE_DISABLE,
+        GPIO_PULLUP_ENABLE,
+        GPIO_PULLDOWN_DISABLE,
+        GPIO_INTR_DISABLE
+    };
+
+    ESP_ERROR_CHECK(gpio_config(&busy_conf));
+#endif
+
+    CRITICAL_SECTION_BEGIN();
+
+    // SPI initialization
+    spi_bus_config_t buscfg = {
+        .miso_io_num = lora_spi.miso,
+        .mosi_io_num = lora_spi.mosi,
+        .sclk_io_num = lora_spi.sclk,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1
+    };
+    spi_device_interface_config_t devcfg = {
+        .clock_speed_hz = SX1262_MAX_SPI_CLOCK_SPEED_MHZ * HZ_PER_MHZ,
+        .mode = 0,
+        .spics_io_num = lora_spi.cs,
+        .command_bits = 8,
+        .address_bits = 16,
+        .queue_size = 1 // using ESP32 synchronous SPI API, will only ever be one transaction "in the air" at a time.
+        // https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-reference/peripherals/spi_master.html#_CPPv4N29spi_device_interface_config_t10queue_sizeE
+    };
+    ESP_ERROR_CHECK(spi_bus_initialize((spi_host_device_t)CONFIG_LORAWAN_SPI_HOST, &buscfg, SPI_DMA_CH_AUTO));
+
+    ESP_ERROR_CHECK(spi_bus_add_device((spi_host_device_t)CONFIG_LORAWAN_SPI_HOST, &devcfg, &lora_spi.handle));
+
+    CRITICAL_SECTION_END();
 }
 
 void BoardResetMcu( void )
