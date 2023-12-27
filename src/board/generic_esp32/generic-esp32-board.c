@@ -1,9 +1,10 @@
-
+/* In this implementation, milliseconds units are used throughout. Ticks are milliseconds. */
 #include "sdkconfig.h"
 
 #include "freertos/FreeRTOS.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "driver/gpio.h"
 #include "driver/spi_common.h"
@@ -13,15 +14,21 @@
 
 // from LoRaMac
 #include "board.h"
+#include "timer.h"
 
 // ANSI
 #include <string.h>
+#include <sys/time.h>
 
 #define ESP_INTR_FLAG_DEFAULT   0
 
 #define HZ_PER_KHZ  1000
 #define KHZ_PER_MHZ 1000
 #define HZ_PER_MHZ  (HZ_PER_KHZ * KHZ_PER_MHZ)
+
+#define MS_PER_S    1000
+#define US_PER_MS   1000
+#define US_PER_S    (MS_PER_S * US_PER_MS)
 
 #define SX126X_MAX_SPI_CLOCK_SPEED_MHZ      16
 #define SX126X_NUM_COMMAND_BITS             8
@@ -48,13 +55,26 @@ static const char *TAG = "ESP32Board";
 
 static portMUX_TYPE my_spinlock = portMUX_INITIALIZER_UNLOCKED;
 
+static esp_timer_handle_t irq_timer_handle;
+static uint32_t rtc_timer_context;
+static uint32_t alarm_start_time;
+
+static void IrqTimerExpiryCallback(void* arg) {
+    TimerIrqHandler();
+}
+
 void BoardInitMcu( void )
 {
 }
 
 void BoardInitPeriph(void)
 {
-    esp_err_t ret;
+    // Create timer
+    const esp_timer_create_args_t timer_args = {
+        .callback = &IrqTimerExpiryCallback,
+        .name = "SX126X IRQ Timer"
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &irq_timer_handle));
 
     lora_spi.miso = CONFIG_SX126X_SPI_MISO_GPIO;
     lora_spi.mosi = CONFIG_SX126X_SPI_MOSI_GPIO;
@@ -262,8 +282,12 @@ void RtcBkupRead( uint32_t *data0, uint32_t *data1 )
  */
 uint32_t RtcGetCalendarTime( uint16_t *milliseconds )
 {
-    *milliseconds = 29;
-    return  42 /* seconds */;
+    int64_t time_us = esp_timer_get_time();
+    uint32_t time_s = (uint32_t)(time_us / US_PER_S);
+
+    *milliseconds = (uint16_t)((time_us / US_PER_MS) % MS_PER_S);
+
+    return time_s;
 }
 
 /*!
@@ -283,7 +307,13 @@ uint32_t RtcGetMinimumTimeout( void )
  */
 uint32_t RtcGetTimerElapsedTime( void )
 {
-    return 0;
+    int64_t current_time_ms;
+    uint32_t elapsed_time_ms;
+
+    current_time_ms = esp_timer_get_time() / US_PER_MS;
+    elapsed_time_ms = current_time_ms - alarm_start_time; 
+
+    return elapsed_time_ms;
 }
 
 /*!
@@ -293,7 +323,7 @@ uint32_t RtcGetTimerElapsedTime( void )
  */
 uint32_t RtcGetTimerValue( void )
 {
-    return 0;
+    return (esp_timer_get_time() / US_PER_MS);
 }
 
 /*!
@@ -304,7 +334,7 @@ uint32_t RtcGetTimerValue( void )
  */
 uint32_t RtcMs2Tick( TimerTime_t milliseconds )
 {
-    return 0;
+    return milliseconds;
 }
 
 
@@ -316,7 +346,7 @@ uint32_t RtcMs2Tick( TimerTime_t milliseconds )
  */
 TimerTime_t RtcTick2Ms( uint32_t tick )
 {
-    return 0;
+    return tick;
 }
 
 
@@ -327,7 +357,19 @@ TimerTime_t RtcTick2Ms( uint32_t tick )
  */
 uint32_t RtcSetTimerContext( void )
 {
-    return 0;
+    rtc_timer_context = esp_timer_get_time() / US_PER_MS;
+
+    return rtc_timer_context;
+}
+
+
+/*!
+ * \brief Gets the RTC timer reference
+ *
+ * \retval value Timer reference value in ticks
+ */
+uint32_t RtcGetTimerContext( void ) {
+    return rtc_timer_context;
 }
 
 
@@ -340,7 +382,16 @@ uint32_t RtcSetTimerContext( void )
  */
 void RtcSetAlarm( uint32_t timeout )
 {
-    
+    uint32_t timeout_us = timeout * US_PER_MS;
+
+    alarm_start_time = esp_timer_get_time() / US_PER_MS;
+
+    if (esp_timer_is_active(irq_timer_handle)) {
+        ESP_ERROR_CHECK(esp_timer_restart(irq_timer_handle, timeout_us));
+    }
+    else {
+        ESP_ERROR_CHECK(esp_timer_start_once(irq_timer_handle, timeout_us));
+    }
 }
 
 /*!
@@ -348,7 +399,9 @@ void RtcSetAlarm( uint32_t timeout )
  */
 void RtcStopAlarm( void )
 {
-    
+    if (esp_timer_is_active(irq_timer_handle)) {
+        ESP_ERROR_CHECK(esp_timer_stop(irq_timer_handle));
+    }
 }
 
 
@@ -487,8 +540,8 @@ void SX126xIoIrqInit( DioIrqHandler dioIrq )
     gpio_config_t io_conf = {
         (1ULL<<lora_spi.irq_dio1),
         GPIO_MODE_INPUT,
-        GPIO_PULLUP_ENABLE,
-        GPIO_PULLDOWN_DISABLE,
+        GPIO_PULLUP_DISABLE,
+        GPIO_PULLDOWN_ENABLE,
         GPIO_INTR_POSEDGE
     };
     ESP_ERROR_CHECK(gpio_config(&io_conf));
