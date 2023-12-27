@@ -62,6 +62,7 @@ idf_component_register(SRCS ${COMPONENT_SRCS}
 include_directories(
     $ENV{IDF_PATH}/components/driver/gpio/include
     $ENV{IDF_PATH}/components/driver/spi/include
+    $ENV{IDF_PATH}/components/esp_timer/include
 )
 
 add_definitions(-DREGION_EU868=1)

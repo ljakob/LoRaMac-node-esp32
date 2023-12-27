@@ -4,6 +4,7 @@
 #include "freertos/FreeRTOS.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #include "driver/gpio.h"
 #include "driver/spi_common.h"
@@ -13,9 +14,11 @@
 
 // from LoRaMac
 #include "board.h"
+#include "timer.h"
 
 // ANSI
 #include <string.h>
+#include <sys/time.h>
 
 #define ESP_INTR_FLAG_DEFAULT   0
 
@@ -24,6 +27,10 @@
 #define HZ_PER_MHZ  (HZ_PER_KHZ * KHZ_PER_MHZ)
 
 #define SX1262_MAX_SPI_CLOCK_SPEED_MHZ  16
+
+#define MS_PER_S    1000
+#define US_PER_MS   1000
+#define US_PER_S    (MS_PER_S * US_PER_MS)
 
 typedef struct spi_s {
     spi_device_handle_t handle;
@@ -41,8 +48,15 @@ typedef struct spi_s {
 static spi_c lora_spi;
 
 static const char *TAG = "ESP32Board";
-
 static portMUX_TYPE my_spinlock = portMUX_INITIALIZER_UNLOCKED;
+
+static esp_timer_handle_t irq_timer_handle;
+static uint32_t timer_context_ticks;
+static uint32_t current_timeout_ticks;
+
+static void IrqTimerExpiryCallback(void* arg) {
+    TimerIrqHandler();
+}
 
 void BoardInitMcu( void )
 {
@@ -50,7 +64,12 @@ void BoardInitMcu( void )
 
 void BoardInitPeriph(void)
 {
-    esp_err_t ret;
+    // Create timer
+    const esp_timer_create_args_t timer_args = {
+        .callback = &IrqTimerExpiryCallback,
+        .name = "SX1262 IRQ Timer"
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&timer_args, &irq_timer_handle));
 
     lora_spi.miso = CONFIG_LORAWAN_SPI_MISO_GPIO;
     lora_spi.mosi = CONFIG_LORAWAN_SPI_MOSI_GPIO;
@@ -250,8 +269,12 @@ void RtcBkupRead( uint32_t *data0, uint32_t *data1 )
  */
 uint32_t RtcGetCalendarTime( uint16_t *milliseconds )
 {
-    *milliseconds = 29;
-    return  42 /* seconds */;
+    int64_t time_us = esp_timer_get_time();
+    uint32_t time_s = (uint32_t)(time_us / US_PER_S);
+
+    *milliseconds = (uint16_t)(time_us * US_PER_MS);
+
+    return time_s;
 }
 
 /*!
@@ -271,7 +294,16 @@ uint32_t RtcGetMinimumTimeout( void )
  */
 uint32_t RtcGetTimerElapsedTime( void )
 {
-    return 0;
+    uint64_t expiry_time;
+    int64_t current_time;
+    uint32_t time_remaining_ticks, elapsed_time;
+
+    ESP_ERROR_CHECK(esp_timer_get_expiry_time(irq_timer_handle, &expiry_time));
+    current_time = esp_timer_get_time();
+    time_remaining_ticks = (uint32_t)(pdMS_TO_TICKS((expiry_time - current_time) / US_PER_MS));
+    elapsed_time = current_timeout_ticks - time_remaining_ticks;
+
+    return elapsed_time;
 }
 
 /*!
@@ -281,7 +313,9 @@ uint32_t RtcGetTimerElapsedTime( void )
  */
 uint32_t RtcGetTimerValue( void )
 {
-    return 0;
+    uint32_t timer_value_ticks = (uint32_t)(esp_timer_get_time() / US_PER_MS);
+
+    return timer_value_ticks;
 }
 
 /*!
@@ -292,7 +326,7 @@ uint32_t RtcGetTimerValue( void )
  */
 uint32_t RtcMs2Tick( TimerTime_t milliseconds )
 {
-    return 0;
+    return pdMS_TO_TICKS(milliseconds);
 }
 
 
@@ -304,7 +338,7 @@ uint32_t RtcMs2Tick( TimerTime_t milliseconds )
  */
 TimerTime_t RtcTick2Ms( uint32_t tick )
 {
-    return 0;
+    return pdTICKS_TO_MS(tick);
 }
 
 
@@ -315,7 +349,21 @@ TimerTime_t RtcTick2Ms( uint32_t tick )
  */
 uint32_t RtcSetTimerContext( void )
 {
-    return 0;
+    int64_t timer_val_ms = esp_timer_get_time() / US_PER_MS;
+
+    timer_context_ticks = (uint32_t)(pdMS_TO_TICKS(timer_val_ms));
+
+    return timer_context_ticks;
+}
+
+
+/*!
+ * \brief Gets the RTC timer reference
+ *
+ * \retval value Timer reference value in ticks
+ */
+uint32_t RtcGetTimerContext( void ) {
+    return timer_context_ticks;
 }
 
 
@@ -328,7 +376,16 @@ uint32_t RtcSetTimerContext( void )
  */
 void RtcSetAlarm( uint32_t timeout )
 {
-    
+    uint32_t timeout_us = pdTICKS_TO_MS(timeout) * US_PER_MS;
+
+    current_timeout_ticks = timeout;
+
+    if (esp_timer_is_active(irq_timer_handle)) {
+        ESP_ERROR_CHECK(esp_timer_restart(irq_timer_handle, timeout_us));
+    }
+    else {
+        ESP_ERROR_CHECK(esp_timer_start_once(irq_timer_handle, timeout_us));
+    }
 }
 
 /*!
@@ -336,7 +393,9 @@ void RtcSetAlarm( uint32_t timeout )
  */
 void RtcStopAlarm( void )
 {
-    
+    if (esp_timer_is_active(irq_timer_handle)) {
+        ESP_ERROR_CHECK(esp_timer_stop(irq_timer_handle));
+    }
 }
 
 
