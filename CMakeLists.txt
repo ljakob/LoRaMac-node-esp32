@@ -36,8 +36,10 @@ set(COMPONENT_SRCS
 "src/LoRaMac-node/src/apps/LoRaMac/common/LmHandler/packages/LmhpClockSync.c"
 "src/LoRaMac-node/src/apps/LoRaMac/common/LmHandler/packages/LmhpCompliance.c"
 "src/LoRaMac-node/src/mac/region/Region.c"
+"src/LoRaMac-node/src/mac/region/RegionBaseUS.c"
 "src/LoRaMac-node/src/mac/region/RegionCommon.c"
 "src/LoRaMac-node/src/mac/region/RegionEU868.c"
+"src/LoRaMac-node/src/mac/region/RegionUS915.c"
 )
 
 # idf.py build 2>&1 | tee LOG | grep "undefined reference" | sed -e 's/.*reference to//' | sort | uniq
@@ -64,6 +66,4 @@ include_directories(
     $ENV{IDF_PATH}/components/driver/spi/include
     $ENV{IDF_PATH}/components/esp_timer/include
 )
-
-add_definitions(-DREGION_EU868=1)
 add_definitions(-DSOFT_SE)
