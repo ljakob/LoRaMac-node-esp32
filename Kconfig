@@ -1,0 +1,47 @@
+menu "SX126x Configuration"
+
+    config SX126X_SPI_MISO_GPIO
+        int "SX126x SPI MISO GPIO"
+        help
+            Set the GPIO number used for SPI MISO.
+
+    config SX126X_SPI_MOSI_GPIO
+        int "SX126x SPI MOSI GPIO"
+        help
+            Set the GPIO number used for SPI MOSI.
+
+    config SX126X_SPI_SCLK_GPIO
+        int "SX126x SPI SCLK GPIO"
+        help
+            Set the GPIO number used for SPI SCLK.
+
+    config SX126X_SPI_CS_GPIO
+        int "SX126x SPI CS GPIO"
+        help
+            Set the GPIO number used for SPI CS.
+
+    config SX126X_RESET_GPIO
+        int "SX126x RESET GPIO"
+        help
+            Set the GPIO number used for RESET.
+
+    config SX126X_IRQ_DIO1_GPIO
+        int "SX126x IRQ (DIO1) GPIO"
+        help
+            Set the GPIO number used for IRQ (DIO1).
+
+    config SX126X_BUSY_GPIO
+        int "SX126x BUSY GPIO"
+        help
+            Set the GPIO number used for BUSY.
+
+    config SX126X_SPI_HOST
+        int "SX126x SPI HOST"
+        default 1
+        help
+            The SPI peripheral used to communicate with the SX1262.
+            0 = SPI1_HOST
+            1 = SPI2_HOST
+            2 = SPI3_HOST
+
+endmenu

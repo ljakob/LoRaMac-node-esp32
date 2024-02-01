@@ -1,0 +1,4 @@
+description: Creates an ESP32 component to allow ESP32 board compatibility with the LoRaMac-node stack.
+dependencies:
+  idf:
+    version: ">=5.0"
